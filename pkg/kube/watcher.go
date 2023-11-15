@@ -17,14 +17,15 @@ var startUpTime = time.Now()
 type EventHandler func(event *EnhancedEvent)
 
 type EventWatcher struct {
-	informer           cache.SharedInformer
-	stopper            chan struct{}
-	labelCache         *LabelCache
-	omitLookup         bool
-	annotationCache    *AnnotationCache
-	fn                 EventHandler
-	maxEventAgeSeconds time.Duration
-	metricsStore       *metrics.Store
+	informer            cache.SharedInformer
+	stopper             chan struct{}
+	annotationCache     *AnnotationCache
+	labelCache          *LabelCache
+	ownerReferenceCache *OwnerReferencesCache
+	omitLookup          bool
+	fn                  EventHandler
+	maxEventAgeSeconds  time.Duration
+	metricsStore        *metrics.Store
 }
 
 func NewEventWatcher(config *rest.Config, namespace string, MaxEventAgeSeconds int64, metricsStore *metrics.Store, fn EventHandler, omitLookup bool) *EventWatcher {
@@ -33,14 +34,15 @@ func NewEventWatcher(config *rest.Config, namespace string, MaxEventAgeSeconds i
 	informer := factory.Core().V1().Events().Informer()
 
 	watcher := &EventWatcher{
-		informer:           informer,
-		stopper:            make(chan struct{}),
-		labelCache:         NewLabelCache(config),
-		omitLookup:         omitLookup,
-		annotationCache:    NewAnnotationCache(config),
-		fn:                 fn,
-		maxEventAgeSeconds: time.Second * time.Duration(MaxEventAgeSeconds),
-		metricsStore:       metricsStore,
+		informer:            informer,
+		stopper:             make(chan struct{}),
+		annotationCache:     NewAnnotationCache(config),
+		labelCache:          NewLabelCache(config),
+		ownerReferenceCache: NewOwnerReferencesCache(config),
+		omitLookup:          omitLookup,
+		fn:                  fn,
+		maxEventAgeSeconds:  time.Second * time.Duration(MaxEventAgeSeconds),
+		metricsStore:        metricsStore,
 	}
 
 	informer.AddEventHandler(watcher)
@@ -129,6 +131,18 @@ func (e *EventWatcher) onEvent(event *corev1.Event) {
 			ev.InvolvedObject.Annotations = annotations
 			ev.InvolvedObject.ObjectReference = *event.InvolvedObject.DeepCopy()
 		}
+
+		ownerReferences, err := e.ownerReferenceCache.GetOwnerReferencesWithCache(&event.InvolvedObject)
+		if err != nil {
+			if ev.InvolvedObject.Kind != "CustomResourceDefinition" {
+				log.Error().Err(err).Msg("Cannot list ownerReferences of the object")
+			} else {
+				log.Debug().Err(err).Msg("Cannot list ownerReferences of the object (CRD)")
+			}
+		} else {
+			ev.InvolvedObject.OwnerReferences = ownerReferences
+			ev.InvolvedObject.ObjectReference = *event.InvolvedObject.DeepCopy()
+		}
 	}
 
 	e.fn(ev)
@@ -149,11 +163,12 @@ func (e *EventWatcher) Stop() {
 
 func NewMockEventWatcher(MaxEventAgeSeconds int64, metricsStore *metrics.Store) *EventWatcher {
 	watcher := &EventWatcher{
-		labelCache:         NewMockLabelCache(),
-		annotationCache:    NewMockAnnotationCache(),
-		maxEventAgeSeconds: time.Second * time.Duration(MaxEventAgeSeconds),
-		fn:                 func(event *EnhancedEvent) {},
-		metricsStore:       metricsStore,
+		labelCache:          NewMockLabelCache(),
+		annotationCache:     NewMockAnnotationCache(),
+		ownerReferenceCache: NewMockOwnerReferencesCache(),
+		maxEventAgeSeconds:  time.Second * time.Duration(MaxEventAgeSeconds),
+		fn:                  func(event *EnhancedEvent) {},
+		metricsStore:        metricsStore,
 	}
 	return watcher
 }
