@@ -30,7 +30,7 @@ type EventWatcher struct {
 	clientset           *kubernetes.Clientset
 }
 
-func NewEventWatcher(config *rest.Config, namespace string, MaxEventAgeSeconds int64, metricsStore *metrics.Store, fn EventHandler, omitLookup bool) *EventWatcher {
+func NewEventWatcher(config *rest.Config, namespace string, MaxEventAgeSeconds int64, metricsStore *metrics.Store, fn EventHandler, omitLookup bool, cacheSize int) *EventWatcher {
 	clientset := kubernetes.NewForConfigOrDie(config)
 	factory := informers.NewSharedInformerFactoryWithOptions(clientset, 0, informers.WithNamespace(namespace))
 	informer := factory.Core().V1().Events().Informer()
@@ -38,7 +38,7 @@ func NewEventWatcher(config *rest.Config, namespace string, MaxEventAgeSeconds i
 	watcher := &EventWatcher{
 		informer:            informer,
 		stopper:             make(chan struct{}),
-		objectMetadataCache: NewObjectMetadataProvider(1024),
+		objectMetadataCache: NewObjectMetadataProvider(cacheSize),
 		omitLookup:          omitLookup,
 		fn:                  fn,
 		maxEventAgeSeconds:  time.Second * time.Duration(MaxEventAgeSeconds),
