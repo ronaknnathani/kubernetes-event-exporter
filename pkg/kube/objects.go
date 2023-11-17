@@ -2,17 +2,55 @@ package kube
 
 import (
 	"context"
+	"strings"
+
+	lru "github.com/hashicorp/golang-lru"
+	"github.com/resmoio/kubernetes-event-exporter/pkg/metrics"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/restmapper"
-	"strings"
 )
 
-func GetObject(reference *v1.ObjectReference, clientset *kubernetes.Clientset, dynClient dynamic.Interface) (*unstructured.Unstructured, error) {
+type ObjectMetadataProvider interface {
+	GetObjectMetadata(reference *v1.ObjectReference, clientset *kubernetes.Clientset, dynClient dynamic.Interface, metricsStore *metrics.Store) (ObjectMetadata, error)
+}
+
+type ObjectMetadataCache struct {
+	cache *lru.ARCCache
+}
+
+var _ ObjectMetadataProvider = &ObjectMetadataCache{}
+
+type ObjectMetadata struct {
+	Annotations     map[string]string
+	Labels          map[string]string
+	OwnerReferences []metav1.OwnerReference
+}
+
+func NewObjectMetadataProvider(size int) ObjectMetadataProvider {
+	cache, err := lru.NewARC(size)
+	if err != nil {
+		panic("cannot init cache: " + err.Error())
+	}
+
+	var o ObjectMetadataProvider = &ObjectMetadataCache{
+		cache: cache,
+	}
+
+	return o
+}
+
+func (o *ObjectMetadataCache) GetObjectMetadata(reference *v1.ObjectReference, clientset *kubernetes.Clientset, dynClient dynamic.Interface, metricsStore *metrics.Store) (ObjectMetadata, error) {
+	// ResourceVersion changes when the object is updated.
+	// We use "UID/ResourceVersion" as cache key so that if the object is updated we get the new metadata.
+	cacheKey := strings.Join([]string{string(reference.UID), reference.ResourceVersion}, "/")
+	if val, ok := o.cache.Get(cacheKey); ok {
+		return val.(ObjectMetadata), nil
+	}
+
 	var group, version string
 	s := strings.Split(reference.APIVersion, "/")
 	if len(s) == 1 {
@@ -27,13 +65,13 @@ func GetObject(reference *v1.ObjectReference, clientset *kubernetes.Clientset, d
 
 	groupResources, err := restmapper.GetAPIGroupResources(clientset.Discovery())
 	if err != nil {
-		return nil, err
+		return ObjectMetadata{}, err
 	}
 
 	rm := restmapper.NewDiscoveryRESTMapper(groupResources)
 	mapping, err := rm.RESTMapping(gk, version)
 	if err != nil {
-		return nil, err
+		return ObjectMetadata{}, err
 	}
 
 	item, err := dynClient.
@@ -42,8 +80,15 @@ func GetObject(reference *v1.ObjectReference, clientset *kubernetes.Clientset, d
 		Get(context.Background(), reference.Name, metav1.GetOptions{})
 
 	if err != nil {
-		return nil, err
+		return ObjectMetadata{}, err
 	}
 
-	return item, nil
+	objectMetadata := ObjectMetadata{
+		OwnerReferences: item.GetOwnerReferences(),
+		Labels:          item.GetLabels(),
+		Annotations:     item.GetAnnotations(),
+	}
+
+	o.cache.Add(cacheKey, objectMetadata)
+	return objectMetadata, nil
 }
