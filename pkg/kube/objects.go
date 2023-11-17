@@ -28,6 +28,7 @@ type ObjectMetadata struct {
 	Annotations     map[string]string
 	Labels          map[string]string
 	OwnerReferences []metav1.OwnerReference
+	Deleted         bool
 }
 
 func NewObjectMetadataProvider(size int) ObjectMetadataProvider {
@@ -90,6 +91,10 @@ func (o *ObjectMetadataCache) GetObjectMetadata(reference *v1.ObjectReference, c
 		OwnerReferences: item.GetOwnerReferences(),
 		Labels:          item.GetLabels(),
 		Annotations:     item.GetAnnotations(),
+	}
+
+	if item.GetDeletionTimestamp() != nil {
+		objectMetadata.Deleted = true
 	}
 
 	o.cache.Add(cacheKey, objectMetadata)

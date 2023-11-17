@@ -123,6 +123,7 @@ func (e *EventWatcher) onEvent(event *corev1.Event) {
 			ev.InvolvedObject.Annotations = objectMetadata.Annotations
 			ev.InvolvedObject.OwnerReferences = objectMetadata.OwnerReferences
 			ev.InvolvedObject.ObjectReference = *event.InvolvedObject.DeepCopy()
+			ev.InvolvedObject.Deleted = objectMetadata.Deleted
 		}
 	}
 
