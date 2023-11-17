@@ -48,6 +48,7 @@ func (o *ObjectMetadataCache) GetObjectMetadata(reference *v1.ObjectReference, c
 	// We use "UID/ResourceVersion" as cache key so that if the object is updated we get the new metadata.
 	cacheKey := strings.Join([]string{string(reference.UID), reference.ResourceVersion}, "/")
 	if val, ok := o.cache.Get(cacheKey); ok {
+		metricsStore.KubeApiReadCacheHits.Inc()
 		return val.(ObjectMetadata), nil
 	}
 
@@ -78,6 +79,8 @@ func (o *ObjectMetadataCache) GetObjectMetadata(reference *v1.ObjectReference, c
 		Resource(mapping.Resource).
 		Namespace(reference.Namespace).
 		Get(context.Background(), reference.Name, metav1.GetOptions{})
+
+	metricsStore.KubeApiReadRequests.Inc()
 
 	if err != nil {
 		return ObjectMetadata{}, err
